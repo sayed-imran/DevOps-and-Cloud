@@ -12,12 +12,44 @@ if ! command -v kubectl &> /dev/null; then
     exit 1
 fi
 
+# Check if kind is available
+if ! command -v kind &> /dev/null; then
+    echo "❌ kind is not installed or not in PATH"
+    echo "Please install Kind first: https://kind.sigs.k8s.io/docs/user/quick-start/#installation"
+    exit 1
+fi
+
 # Check if istioctl is available
 if ! command -v istioctl &> /dev/null; then
     echo "❌ istioctl is not installed or not in PATH"
     echo "Please install Istio first: https://istio.io/latest/docs/setup/getting-started/"
     exit 1
 fi
+
+# Function to create Kind cluster using kind-config.yaml
+create_kind_cluster() {
+    echo "🔍 Checking for Kind cluster 'cluster1'..."
+    if kind get clusters 2>/dev/null | grep -q "^cluster1$"; then
+        echo "✅ Kind cluster 'cluster1' already exists"
+    else
+        echo "📦 Creating Kind cluster 'cluster1' using infrastructure/kind/kind-config.yaml..."
+        kind create cluster --config infrastructure/kind/kind-config.yaml
+        echo "✅ Kind cluster 'cluster1' created"
+    fi
+    kubectl config use-context kind-cluster1 &>/dev/null || true
+}
+
+# Function to install Istio using istio.yaml
+install_istio() {
+    echo "🔍 Checking Istio installation..."
+    if kubectl get ns istio-system &>/dev/null && kubectl get service -n istio-system istio-ingressgateway &>/dev/null; then
+        echo "✅ Istio is already installed"
+    else
+        echo "📦 Installing Istio using infrastructure/istio/istio.yaml..."
+        istioctl install -f infrastructure/istio/istio.yaml -y
+        echo "✅ Istio installed successfully"
+    fi
+}
 
 # Function to check if a namespace has Istio injection enabled
 check_istio_injection() {
@@ -37,9 +69,11 @@ create_namespace() {
         echo "✅ Namespace traffic-shifting-demo already exists"
     else
         echo "📦 Creating namespace traffic-shifting-demo..."
-        kubectl apply -f namespace.yaml
+        kubectl apply -f manifests/base/namespace.yaml
         echo "✅ Created namespace traffic-shifting-demo"
     fi
+    echo "🏷️  Enabling Istio injection for namespace: traffic-shifting-demo..."
+    kubectl label namespace traffic-shifting-demo istio-injection=enabled --overwrite
 }
 
 # Function to create TMDB API key secret
@@ -64,6 +98,12 @@ create_secret() {
 
 # Function to deploy resources
 deploy_resources() {
+    echo "📦 Checking Kind cluster..."
+    create_kind_cluster
+
+    echo "📦 Checking Istio..."
+    install_istio
+
     echo "📦 Creating namespace..."
     create_namespace
     
@@ -71,22 +111,22 @@ deploy_resources() {
     create_secret
     
     echo "📦 Deploying frontend components..."
-    kubectl apply -f frontend.yaml
+    kubectl apply -f manifests/base/frontend.yaml
     
     echo "📦 Deploying backend components..."
-    kubectl apply -f deployment-v1.yaml
-    kubectl apply -f deployment-v2.yaml
-    kubectl apply -f service.yaml
+    kubectl apply -f manifests/base/deployment-v1.yaml
+    kubectl apply -f manifests/base/deployment-v2.yaml
+    kubectl apply -f manifests/base/service.yaml
     
     echo "📦 Deploying networking components..."
-    kubectl apply -f gateway.yaml
-    kubectl apply -f destination-rule.yaml
+    kubectl apply -f manifests/istio/gateway.yaml
+    kubectl apply -f manifests/istio/destination-rule.yaml
     
     echo "📦 Deploying configuration maps..."
-    kubectl apply -f configs.yaml
+    kubectl apply -f manifests/base/configmap.yaml
     
     echo "📦 Setting initial traffic to 100% V1..."
-    kubectl apply -f virtual-service-100-0.yaml
+    kubectl apply -f manifests/istio/virtual-services/virtual-service-100-0.yaml
     
     echo "⏳ Waiting for deployments to be ready..."
     kubectl wait --for=condition=available --timeout=300s deployment/movie-frontend -n traffic-shifting-demo || echo "⚠️ Frontend deployment timeout"
@@ -101,7 +141,7 @@ deploy_resources() {
 apply_traffic_config() {
     local config=$1
     echo "🔄 Applying traffic configuration: $config"
-    kubectl apply -f "virtual-service-$config.yaml"
+    kubectl apply -f "manifests/istio/virtual-services/virtual-service-$config.yaml"
     echo "✅ Traffic configuration applied: $config"
 }
 
@@ -130,21 +170,21 @@ get_ingress_url() {
     echo "🌐 Getting Ingress URL..."
     
     # Check if we're using LoadBalancer
-    INGRESS_HOST=$(kubectl -n istio-system get service istio-ingressgateway -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-    INGRESS_PORT=$(kubectl -n istio-system get service istio-ingressgateway -o jsonpath='{.spec.ports[?(@.name=="http2")].port}')
+    INGRESS_HOST=$(kubectl -n istio-system get service istio-ingressgateway -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
+    INGRESS_PORT=$(kubectl -n istio-system get service istio-ingressgateway -o jsonpath='{.spec.ports[?(@.name=="http2")].port}' 2>/dev/null || true)
     
     if [[ -z "$INGRESS_HOST" ]]; then
-        INGRESS_HOST=$(kubectl -n istio-system get service istio-ingressgateway -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+        INGRESS_HOST=$(kubectl -n istio-system get service istio-ingressgateway -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
     fi
     
     # Fallback to NodePort if LoadBalancer is not available
     if [[ -z "$INGRESS_HOST" ]]; then
         echo "⚠️ LoadBalancer not available. Using NodePort..."
-        INGRESS_HOST=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="ExternalIP")].address}')
+        INGRESS_HOST=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="ExternalIP")].address}' 2>/dev/null || true)
         if [[ -z "$INGRESS_HOST" ]]; then
-            INGRESS_HOST=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+            INGRESS_HOST=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || true)
         fi
-        INGRESS_PORT=$(kubectl -n istio-system get service istio-ingressgateway -o jsonpath='{.spec.ports[?(@.name=="http2")].nodePort}')
+        INGRESS_PORT=$(kubectl -n istio-system get service istio-ingressgateway -o jsonpath='{.spec.ports[?(@.name=="http2")].nodePort}' 2>/dev/null || true)
     fi
     
     if [[ -n "$INGRESS_HOST" && -n "$INGRESS_PORT" ]]; then
@@ -162,19 +202,19 @@ generate_traffic() {
     echo "🔄 Generating test traffic..."
     
     # Get the ingress URL
-    INGRESS_HOST=$(kubectl -n istio-system get service istio-ingressgateway -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-    INGRESS_PORT=$(kubectl -n istio-system get service istio-ingressgateway -o jsonpath='{.spec.ports[?(@.name=="http2")].port}')
+    INGRESS_HOST=$(kubectl -n istio-system get service istio-ingressgateway -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
+    INGRESS_PORT=$(kubectl -n istio-system get service istio-ingressgateway -o jsonpath='{.spec.ports[?(@.name=="http2")].port}' 2>/dev/null || true)
     
     if [[ -z "$INGRESS_HOST" ]]; then
-        INGRESS_HOST=$(kubectl -n istio-system get service istio-ingressgateway -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+        INGRESS_HOST=$(kubectl -n istio-system get service istio-ingressgateway -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
     fi
     
     if [[ -z "$INGRESS_HOST" ]]; then
-        INGRESS_HOST=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="ExternalIP")].address}')
+        INGRESS_HOST=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="ExternalIP")].address}' 2>/dev/null || true)
         if [[ -z "$INGRESS_HOST" ]]; then
-            INGRESS_HOST=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+            INGRESS_HOST=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || true)
         fi
-        INGRESS_PORT=$(kubectl -n istio-system get service istio-ingressgateway -o jsonpath='{.spec.ports[?(@.name=="http2")].nodePort}')
+        INGRESS_PORT=$(kubectl -n istio-system get service istio-ingressgateway -o jsonpath='{.spec.ports[?(@.name=="http2")].nodePort}' 2>/dev/null || true)
     fi
     
     if [[ -n "$INGRESS_HOST" && -n "$INGRESS_PORT" ]]; then
@@ -224,17 +264,17 @@ EOF
 # Function to cleanup
 cleanup() {
     echo "🧹 Cleaning up resources..."
-    kubectl delete -f frontend.yaml --ignore-not-found=true
-    kubectl delete -f deployment-v1.yaml --ignore-not-found=true
-    kubectl delete -f deployment-v2.yaml --ignore-not-found=true
-    kubectl delete -f service.yaml --ignore-not-found=true
-    kubectl delete -f gateway.yaml --ignore-not-found=true
-    kubectl delete -f destination-rule.yaml --ignore-not-found=true
-    kubectl delete -f configs.yaml --ignore-not-found=true
-    kubectl delete -f virtual-service-100-0.yaml --ignore-not-found=true
-    kubectl delete -f virtual-service-80-20.yaml --ignore-not-found=true
-    kubectl delete -f virtual-service-50-50.yaml --ignore-not-found=true
-    kubectl delete -f virtual-service-0-100.yaml --ignore-not-found=true
+    kubectl delete -f manifests/base/frontend.yaml --ignore-not-found=true
+    kubectl delete -f manifests/base/deployment-v1.yaml --ignore-not-found=true
+    kubectl delete -f manifests/base/deployment-v2.yaml --ignore-not-found=true
+    kubectl delete -f manifests/base/service.yaml --ignore-not-found=true
+    kubectl delete -f manifests/istio/gateway.yaml --ignore-not-found=true
+    kubectl delete -f manifests/istio/destination-rule.yaml --ignore-not-found=true
+    kubectl delete -f manifests/base/configmap.yaml --ignore-not-found=true
+    kubectl delete -f manifests/istio/virtual-services/virtual-service-100-0.yaml --ignore-not-found=true
+    kubectl delete -f manifests/istio/virtual-services/virtual-service-80-20.yaml --ignore-not-found=true
+    kubectl delete -f manifests/istio/virtual-services/virtual-service-50-50.yaml --ignore-not-found=true
+    kubectl delete -f manifests/istio/virtual-services/virtual-service-0-100.yaml --ignore-not-found=true
     kubectl delete pod traffic-test -n traffic-shifting-demo --ignore-not-found=true
     kubectl delete secret tmdb-api-key -n traffic-shifting-demo --ignore-not-found=true
     kubectl delete namespace traffic-shifting-demo --ignore-not-found=true
@@ -246,7 +286,7 @@ show_menu() {
     echo ""
     echo "🎛️ Traffic Shifting Demo Menu"
     echo "=============================="
-    echo "1. Deploy all resources"
+    echo "1. Deploy all resources (Kind cluster, Istio, App)"
     echo "2. Set traffic to 100% V1, 0% V2"
     echo "3. Set traffic to 80% V1, 20% V2"
     echo "4. Set traffic to 50% V1, 50% V2"
@@ -260,9 +300,10 @@ show_menu() {
     echo ""
 }
 
-# Check prerequisites
-create_namespace
-check_istio_injection traffic-shifting-demo
+# Check prerequisites (if cluster is active)
+if kubectl cluster-info &>/dev/null; then
+    check_istio_injection traffic-shifting-demo || true
+fi
 
 # Main execution
 if [[ $# -eq 0 ]]; then

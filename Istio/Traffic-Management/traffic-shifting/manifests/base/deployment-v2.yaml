@@ -1,28 +1,30 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: movie-backend-v1
+  name: movie-backend-v2
   namespace: traffic-shifting-demo
 spec:
   selector:
     matchLabels:
       app: movie-backend
-      version: v1
+      version: v2
   template:
     metadata:
       labels:
         app: movie-backend
-        version: v1
+        version: v2
     spec:
       containers:
         - name: movie-backend
-          image: sayedimran/istio-sample-app-backend:v1.0.1
+          image: sayedimran/istio-sample-app-backend:v1.0.2
           env:
             - name: TMDB_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: tmdb-api-key
                   key: TMDB_API_KEY
+            - name: DATA_DIR
+              value: hollywood-data
           resources:
             limits:
               memory: "1Gi"

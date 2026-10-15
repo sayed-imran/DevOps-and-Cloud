@@ -66,23 +66,35 @@ Traffic shifting (also known as traffic splitting) is a technique used to gradua
 
 ```
 traffic-shifting/
-├── deployment-v1.yaml              # Backend V1 deployment
-├── deployment-v2.yaml              # Backend V2 deployment
-├── service.yaml                     # Backend service
-├── frontend.yaml                    # Frontend deployment and service
-├── gateway.yaml                     # Istio Gateway
-├── destination-rule.yaml           # Istio DestinationRule
-├── virtual-service-100-0.yaml      # 100% V1, 0% V2
-├── virtual-service-80-20.yaml      # 80% V1, 20% V2
-├── virtual-service-50-50.yaml      # 50% V1, 50% V2
-├── virtual-service-0-100.yaml      # 0% V1, 100% V2
-├── configs.yaml                     # ConfigMaps for observability
-├── namespace.yaml                   # Namespace reference (optional)
-├── deploy.sh                        # Interactive deployment script
-├── test-traffic.sh                  # Traffic testing script
-├── cleanup.sh                       # Cleanup script
-├── SETUP.md                         # Detailed setup guide
-└── README.md                        # This file
+├── manifests/                        # All Kubernetes & Istio YAML resources
+│   ├── base/                         # Core Kubernetes workloads & services
+│   │   ├── namespace.yaml            # Target namespace definition
+│   │   ├── configmap.yaml            # ConfigMaps for observability / test scripts
+│   │   ├── frontend.yaml             # Frontend UI deployment & service
+│   │   ├── deployment-v1.yaml        # Backend V1 deployment (Bollywood)
+│   │   ├── deployment-v2.yaml        # Backend V2 deployment (Hollywood)
+│   │   └── service.yaml              # Backend Kubernetes service
+│   └── istio/                        # Istio Traffic Management resources
+│       ├── gateway.yaml              # Istio Gateway definition
+│       ├── destination-rule.yaml     # DestinationRule defining v1 & v2 subsets
+│       └── virtual-services/         # Traffic weight configurations
+│           ├── virtual-service-100-0.yaml  # 100% V1, 0% V2
+│           ├── virtual-service-80-20.yaml  # 80% V1, 20% V2
+│           ├── virtual-service-50-50.yaml  # 50% V1, 50% V2
+│           └── virtual-service-0-100.yaml  # 0% V1, 100% V2
+├── infrastructure/                   # Cluster & Mesh setup configurations
+│   ├── kind/
+│   │   └── kind-config.yaml          # Kind cluster topology config
+│   └── istio/
+│       └── istio.yaml                # IstioOperator installation profile
+├── scripts/                          # Operational & testing scripts
+│   ├── deploy.sh                     # Interactive deployment script
+│   ├── cleanup.sh                    # Resource cleanup script
+│   └── test-traffic.sh               # Traffic distribution testing script
+├── docs/                             # Detailed documentation
+│   ├── SETUP.md                      # Detailed setup guide
+│   └── DEPLOYMENTS.md                # Detailed deployment guide
+└── README.md                         # Main entry point & project overview
 ```
 
 ## Prerequisites
@@ -108,8 +120,8 @@ traffic-shifting/
 
 ### Option 1: Interactive Script (Recommended)
 ```bash
-chmod +x deploy.sh
-./deploy.sh
+chmod +x scripts/*.sh
+./scripts/deploy.sh
 ```
 
 The script provides an interactive menu to:
@@ -128,18 +140,18 @@ The script provides an interactive menu to:
 
 2. **Deploy the resources:**
    ```bash
-   kubectl apply -f frontend.yaml
-   kubectl apply -f deployment-v1.yaml
-   kubectl apply -f deployment-v2.yaml
-   kubectl apply -f service.yaml
-   kubectl apply -f gateway.yaml
-   kubectl apply -f destination-rule.yaml
-   kubectl apply -f configs.yaml
+   kubectl apply -f manifests/base/frontend.yaml
+   kubectl apply -f manifests/base/deployment-v1.yaml
+   kubectl apply -f manifests/base/deployment-v2.yaml
+   kubectl apply -f manifests/base/service.yaml
+   kubectl apply -f manifests/istio/gateway.yaml
+   kubectl apply -f manifests/istio/destination-rule.yaml
+   kubectl apply -f manifests/base/configmap.yaml
    ```
 
 3. **Apply initial traffic configuration (100% to V1):**
    ```bash
-   kubectl apply -f virtual-service-100-0.yaml
+   kubectl apply -f manifests/istio/virtual-services/virtual-service-100-0.yaml
    ```
 
 4. **Verify deployment:**
@@ -153,25 +165,25 @@ The script provides an interactive menu to:
 
 ### Scenario 1: All Traffic to V1 (100% - 0%)
 ```bash
-kubectl apply -f virtual-service-100-0.yaml
+kubectl apply -f manifests/istio/virtual-services/virtual-service-100-0.yaml
 ```
 All API requests go to the V1 backend (Bollywood movies).
 
 ### Scenario 2: Canary Testing (80% - 20%)
 ```bash
-kubectl apply -f virtual-service-80-20.yaml
+kubectl apply -f manifests/istio/virtual-services/virtual-service-80-20.yaml
 ```
 80% of requests go to V1, 20% to V2 (Hollywood movies).
 
 ### Scenario 3: A/B Testing (50% - 50%)
 ```bash
-kubectl apply -f virtual-service-50-50.yaml
+kubectl apply -f manifests/istio/virtual-services/virtual-service-50-50.yaml
 ```
 Equal distribution between both versions.
 
 ### Scenario 4: Full Migration (0% - 100%)
 ```bash
-kubectl apply -f virtual-service-0-100.yaml
+kubectl apply -f manifests/istio/virtual-services/virtual-service-0-100.yaml
 ```
 
 ## Accessing the Application
@@ -199,17 +211,17 @@ kubectl apply -f virtual-service-0-100.yaml
 Use the provided test script to analyze traffic distribution:
 
 ```bash
-# Make the script executable
-chmod +x test-traffic.sh
+# Make the scripts executable
+chmod +x scripts/*.sh
 
 # Test with 100 requests
-./test-traffic.sh test 100
+./scripts/test-traffic.sh test 100
 
 # Monitor real-time traffic
-./test-traffic.sh monitor
+./scripts/test-traffic.sh monitor
 
 # Check current configuration
-./test-traffic.sh config
+./scripts/test-traffic.sh config
 ```
 
 You can also manually test:
@@ -335,25 +347,25 @@ spec:
 
 Remove all resources using the cleanup script:
 ```bash
-chmod +x cleanup.sh
-./cleanup.sh
+chmod +x scripts/cleanup.sh
+./scripts/cleanup.sh
 ```
 
 Or use the interactive deployment script:
 ```bash
-./deploy.sh
+./scripts/deploy.sh
 # Choose option 10 for cleanup
 ```
 
 Manual cleanup:
 ```bash
-kubectl delete -f frontend.yaml
-kubectl delete -f deployment-v1.yaml
-kubectl delete -f deployment-v2.yaml
-kubectl delete -f service.yaml
-kubectl delete -f gateway.yaml
-kubectl delete -f destination-rule.yaml
-kubectl delete -f configs.yaml
+kubectl delete -f manifests/base/frontend.yaml
+kubectl delete -f manifests/base/deployment-v1.yaml
+kubectl delete -f manifests/base/deployment-v2.yaml
+kubectl delete -f manifests/base/service.yaml
+kubectl delete -f manifests/istio/gateway.yaml
+kubectl delete -f manifests/istio/destination-rule.yaml
+kubectl delete -f manifests/base/configmap.yaml
 kubectl delete secret tmdb-api-key
 ```
 
@@ -403,10 +415,10 @@ istioctl analyze
 ### 1. Blue-Green Deployment
 ```bash
 # Start with all traffic on blue (v1)
-kubectl apply -f virtual-service-100-0.yaml
+kubectl apply -f manifests/istio/virtual-services/virtual-service-100-0.yaml
 
 # Switch all traffic to green (v2) after validation
-kubectl apply -f virtual-service-0-100.yaml
+kubectl apply -f manifests/istio/virtual-services/virtual-service-0-100.yaml
 ```
 
 ### 2. Canary Deployment
@@ -415,15 +427,15 @@ kubectl apply -f virtual-service-0-100.yaml
 # (Create custom virtual service with these weights)
 
 # Gradually increase canary traffic
-kubectl apply -f virtual-service-80-20.yaml
-kubectl apply -f virtual-service-50-50.yaml
-kubectl apply -f virtual-service-0-100.yaml
+kubectl apply -f manifests/istio/virtual-services/virtual-service-80-20.yaml
+kubectl apply -f manifests/istio/virtual-services/virtual-service-50-50.yaml
+kubectl apply -f manifests/istio/virtual-services/virtual-service-0-100.yaml
 ```
 
 ### 3. A/B Testing
 ```bash
 # Split traffic evenly for testing
-kubectl apply -f virtual-service-50-50.yaml
+kubectl apply -f manifests/istio/virtual-services/virtual-service-50-50.yaml
 
 # Monitor metrics and user behavior
 # Route based on user characteristics if needed
@@ -445,9 +457,9 @@ Example GitLab CI pipeline step:
 ```yaml
 deploy_canary:
   script:
-    - kubectl apply -f deployment-v2.yaml
-    - kubectl apply -f virtual-service-80-20.yaml
-    - ./test-traffic.sh test 100
+    - kubectl apply -f manifests/base/deployment-v2.yaml
+    - kubectl apply -f manifests/istio/virtual-services/virtual-service-80-20.yaml
+    - ./scripts/test-traffic.sh test 100
     - # Add health checks and validation
 ```
 

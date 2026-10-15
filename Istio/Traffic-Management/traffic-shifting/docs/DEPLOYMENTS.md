@@ -6,77 +6,77 @@ All resources are deployed in the `traffic-shifting-demo` namespace with Istio i
 ## Core Deployments
 
 ### 1. Namespace
-- **File**: `namespace.yaml`
+- **File**: `manifests/base/namespace.yaml`
 - **Resource**: Namespace `traffic-shifting-demo`
 - **Features**: Istio injection enabled
 
 ### 2. Backend Deployments
-- **File**: `deployment-v1.yaml`
+- **File**: `manifests/base/deployment-v1.yaml`
   - **Resource**: Deployment `movie-backend-v1`
-  - **Image**: `sayedimran/istio-sample-app-backend:v1.0.1`
+  - **Image**: `sayedimran/istio-sample-app-backend:v1.0.2`
   - **Labels**: `app=movie-backend`, `version=v1`
   
-- **File**: `deployment-v2.yaml`  
+- **File**: `manifests/base/deployment-v2.yaml`  
   - **Resource**: Deployment `movie-backend-v2`
-  - **Image**: `sayedimran/istio-sample-app-backend:v1.0.1`
+  - **Image**: `sayedimran/istio-sample-app-backend:v1.0.2`
   - **Labels**: `app=movie-backend`, `version=v2`
   - **Environment**: Uses Hollywood data (`DATA_DIR=hollywood-data`)
 
 ### 3. Frontend Deployment
-- **File**: `frontend.yaml`
+- **File**: `manifests/base/frontend.yaml`
   - **Resource**: Deployment `movie-frontend`
   - **Image**: `sayedimran/istio-sample-app-frontend:v1.0.0`
   - **Labels**: `app=movie-frontend`
 
 ### 4. Services
-- **File**: `service.yaml`
+- **File**: `manifests/base/service.yaml`
   - **Resource**: Service `movie-backend`
   - **Port**: 8000
   - **Selector**: `app=movie-backend`
 
-- **File**: `frontend.yaml` (includes service)
+- **File**: `manifests/base/frontend.yaml` (includes service)
   - **Resource**: Service `movie-frontend`
   - **Port**: 80
   - **Selector**: `app=movie-frontend`
 
 ### 5. Istio Configuration
-- **File**: `gateway.yaml`
+- **File**: `manifests/istio/gateway.yaml`
   - **Resource**: Gateway `istio-gateway`
   - **Hosts**: `*`
   - **Port**: 80 (HTTP)
 
-- **File**: `destination-rule.yaml`
+- **File**: `manifests/istio/destination-rule.yaml`
   - **Resource**: DestinationRule `movie-backend`
   - **Subsets**: `v1` and `v2` based on version labels
 
-- **File**: `frontend.yaml` (includes VirtualService)
+- **File**: `manifests/base/frontend.yaml` (includes VirtualService)
   - **Resource**: VirtualService `movie-frontend`
   - **Routes**: Frontend traffic routing
 
 ### 6. Traffic Splitting Virtual Services
-- **File**: `virtual-service-100-0.yaml`
+- **File**: `manifests/istio/virtual-services/virtual-service-100-0.yaml`
   - **Resource**: VirtualService `movie-backend`
   - **Traffic**: 100% to v1, 0% to v2
 
-- **File**: `virtual-service-80-20.yaml`
+- **File**: `manifests/istio/virtual-services/virtual-service-80-20.yaml`
   - **Resource**: VirtualService `movie-backend`
   - **Traffic**: 80% to v1, 20% to v2
 
-- **File**: `virtual-service-50-50.yaml`
+- **File**: `manifests/istio/virtual-services/virtual-service-50-50.yaml`
   - **Resource**: VirtualService `movie-backend`
   - **Traffic**: 50% to v1, 50% to v2
 
-- **File**: `virtual-service-0-100.yaml`
+- **File**: `manifests/istio/virtual-services/virtual-service-0-100.yaml`
   - **Resource**: VirtualService `movie-backend`
   - **Traffic**: 0% to v1, 100% to v2
 
 ### 7. Configuration and Secrets
-- **File**: `configs.yaml`
+- **File**: `manifests/base/configmap.yaml`
   - **Resource**: ConfigMap `observability-config`
   - **Contains**: Kiali and Grafana configurations
 
 - **Secret**: `tmdb-api-key`
-  - **Created by**: `deploy.sh` script
+  - **Created by**: `scripts/deploy.sh` script
   - **Contains**: TMDB API key for movie data
 
 ## Deployment Process
@@ -87,7 +87,7 @@ All resources are deployed in the `traffic-shifting-demo` namespace with Istio i
 3. TMDB API key (optional, demo key used if not provided)
 
 ### Deployment Steps
-The `deploy.sh` script handles the complete deployment:
+The `scripts/deploy.sh` script handles the complete deployment:
 
 1. **Create Namespace**: Creates `traffic-shifting-demo` namespace with Istio injection
 2. **Create Secret**: Creates TMDB API key secret
@@ -100,19 +100,19 @@ The `deploy.sh` script handles the complete deployment:
 
 ### Traffic Management
 Use the deployment script to manage traffic splitting:
-- **100% V1**: `./deploy.sh` → Option 2
-- **80% V1, 20% V2**: `./deploy.sh` → Option 3  
-- **50% V1, 50% V2**: `./deploy.sh` → Option 4
-- **100% V2**: `./deploy.sh` → Option 5
+- **100% V1**: `./scripts/deploy.sh` → Option 2
+- **80% V1, 20% V2**: `./scripts/deploy.sh` → Option 3  
+- **50% V1, 50% V2**: `./scripts/deploy.sh` → Option 4
+- **100% V2**: `./scripts/deploy.sh` → Option 5
 
 ### Monitoring
-- **Status Check**: `./deploy.sh` → Option 6
-- **Get URL**: `./deploy.sh` → Option 7
-- **Generate Traffic**: `./deploy.sh` → Option 8
-- **Test Splitting**: `./deploy.sh` → Option 9
+- **Status Check**: `./scripts/deploy.sh` → Option 6
+- **Get URL**: `./scripts/deploy.sh` → Option 7
+- **Generate Traffic**: `./scripts/deploy.sh` → Option 8
+- **Test Splitting**: `./scripts/deploy.sh` → Option 9
 
 ### Cleanup
-- **Full Cleanup**: `./deploy.sh` → Option 10
+- **Full Cleanup**: `./scripts/deploy.sh` → Option 10
   - Removes all resources including namespace
 
 ## Resource Requirements

@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: movie-frontend
-          image: sayedimran/istio-sample-app-frontend:v1.0.0
+          image: sayedimran/istio-sample-app-frontend:v1.0.2
           resources:
             limits:
               memory: 1Gi
