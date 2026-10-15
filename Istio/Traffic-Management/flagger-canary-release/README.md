@@ -15,61 +15,70 @@ This demo features:
 
 ## Architecture
 
+The canary target is the `movie-backend` Deployment. Flagger copies it to `movie-backend-primary`, which serves live traffic, and takes over the `movie-backend` VirtualService to shift `/api/` traffic between primary and canary. All routes use the host `devops.imran`.
+
 ```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│                 │    │                  │    │                 │
-│   Istio Gateway │────┤   Flagger CRD    │────┤  VirtualService │
-│                 │    │     (Canary)     │    │   (Generated)   │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-                                │
-                                │
-                    ┌───────────┴───────────┐
-                    │                       │
-                    ▼                       ▼
-            ┌───────────────┐       ┌───────────────┐
-            │   Primary     │       │    Canary     │
-            │  (Stable)     │       │  (New Version)│
-            │   Workload    │       │   Workload    │
-            └───────────────┘       └───────────────┘
-                    │                       │
-                    └───────────┬───────────┘
-                                │
-                        ┌───────────────┐
-                        │   Frontend    │
-                        │  (Movie UI)   │
-                        │               │
-                        └───────────────┘
+                        Browser / curl  (Host: devops.imran)
+                                  │
+                                  ▼
+                     ┌─────────────────────────┐
+                     │  Istio Ingress Gateway  │   Gateway: istio-gateway
+                     └────────────┬────────────┘
+                     path /       │       path /api/  (rewritten to /)
+              ┌───────────────────┴───────────────────┐
+              ▼                                       ▼
+    ┌───────────────────┐             ┌───────────────────────────────┐
+    │  movie-frontend   │             │ VirtualService movie-backend  │
+    │    (React UI)     │             │   (managed by Flagger)        │
+    └───────────────────┘             └───────────────┬───────────────┘
+                                                      │
+                                         ┌────────────┴────────────┐
+                                         ▼                         ▼
+                                 ┌───────────────┐         ┌───────────────┐
+                                 │    primary    │         │    canary     │
+                                 │   (stable)    │         │ (new version) │
+                                 └───────────────┘         └───────────────┘
 ```
 
 ## Components
 
 ### 1. Applications
-- **Sample Workload**: A simple web application that can be updated with different versions
-- **Movie Frontend**: React-based UI to interact with the backend
-- **Movie Backend**: Movie catalog service (used as the canary target)
+- **Movie Backend** (`backend.yaml`): Deployment `movie-backend` (`sayedimran/istio-sample-app-backend:v1.0.1`, `DATA_DIR=bollywood-data`), plus its Service and VirtualService. This is the canary target.
+- **Movie Frontend** (`frontend.yaml`): React UI (`sayedimran/istio-sample-app-frontend:v1.0.0`), plus its Service and VirtualService
+- **Gateway** (`gateway.yaml`): `istio-gateway` on port 80 for the host `devops.imran`
 
 ### 2. Flagger Resources
-- **Canary CRD**: Defines the canary analysis configuration
-- **LoadTester**: Generates traffic during canary analysis
-- **Prometheus**: Monitors success rates and request duration
+- **Canary** (`canary.yaml`): `canary-release`, which targets `deployment/movie-backend` and defines the analysis
+- **Load Tester**: `flagger-loadtester` in `istio-system`, which runs the canary webhooks
+- **Prometheus**: Supplies the success-rate and latency metrics
 
-### 3. Kubernetes Resources
-- **Deployment**: The target deployment for canary releases
-- **Service**: Kubernetes service (managed by Flagger)
-- **Gateway**: Istio gateway for external access
-- **VirtualService**: Traffic routing (managed by Flagger)
+### 3. Resources Flagger Creates
+Once the canary is initialized, Flagger manages:
+- **Deployment** `movie-backend-primary`: Serves live traffic. Flagger scales the original `movie-backend` to zero until the next release.
+- **Services** `movie-backend`, `movie-backend-primary`, and `movie-backend-canary`
+- **DestinationRules** `movie-backend-primary` and `movie-backend-canary`
+- **VirtualService** `movie-backend`: Holds the primary/canary weights during a release
 
 ## Prerequisites
 
-1. **Kubernetes cluster** with Istio installed
-2. **Flagger** installed in the cluster:
+1. **Kubernetes cluster** with `kubectl` access. For a local Kind cluster, see [SETUP.md](SETUP.md#kind).
+2. **Istio**, with sidecar injection enabled in the `default` namespace:
+   ```bash
+   istioctl install -y
+   kubectl label namespace default istio-injection=enabled
+   ```
+3. **Prometheus** (for metrics collection):
+   ```bash
+   kubectl apply -f https://raw.githubusercontent.com/istio/istio/release-1.20/samples/addons/prometheus.yaml
+   ```
+4. **Flagger**, installed with Helm:
    ```bash
    # Add Flagger Helm repository
    helm repo add flagger https://flagger.app
-   
+
    # Install Flagger CRDs
    kubectl apply -f https://raw.githubusercontent.com/fluxcd/flagger/main/artifacts/flagger/crd.yaml
-   
+
    # Install Flagger for Istio
    helm upgrade -i flagger flagger/flagger \
      --namespace=istio-system \
@@ -77,77 +86,84 @@ This demo features:
      --set meshProvider=istio \
      --set metricsServer=http://prometheus:9090
    ```
-
-3. **Flagger Load Tester**:
+5. **Flagger Load Tester** in `istio-system`, where the webhooks in `canary.yaml` call it (`http://flagger-loadtester.istio-system/`):
    ```bash
-   kubectl apply -k https://github.com/fluxcd/flagger//kustomize/tester?ref=main
+   helm upgrade -i flagger-loadtester flagger/loadtester \
+     --namespace=istio-system \
+     --set cmd.timeout=1h \
+     --set cmd.namespaceRegexp=''
    ```
 
-4. **Prometheus** (for metrics collection):
-   ```bash
-   kubectl apply -f https://raw.githubusercontent.com/istio/istio/release-1.20/samples/addons/prometheus.yaml
-   ```
+The deploy script can install items 2–5 for you (menu option 3). See [SETUP.md](SETUP.md) for details and verification steps.
 
-5. **Istio injection enabled**:
-   ```bash
-   kubectl label namespace default istio-injection=enabled
-   ```
-
-6. **kubectl**: Configured to access your cluster
+> **Note:** The manifests and the webhook URLs in `canary.yaml` (`movie-backend-canary.default`) assume the `default` namespace.
 
 ## Quick Start
 
+Run the commands from this directory (`Istio/Traffic-Management/flagger-canary-release`).
+
 ### Option 1: Automated Script (Recommended)
 ```bash
-chmod +x deploy.sh
 ./deploy.sh
 ```
 
-The script provides an interactive menu to:
-- Deploy all resources including Flagger dependencies
-- Initialize the canary deployment
-- Trigger canary releases with new versions
-- Monitor canary analysis progress
-- Clean up resources
+| Option | Action |
+|--------|--------|
+| 1 | Check prerequisites (istioctl, Istio, Flagger, Prometheus, load tester) |
+| 2 | Install Istio |
+| 3 | Install whatever is missing: Istio, Prometheus, Flagger, and the load tester |
+| 4 | Deploy into `default`: prompts for the TMDB key, applies `backend.yaml`, `frontend.yaml`, `gateway.yaml`, and `canary.yaml`, then prints the URL |
+| 8 | Print the application URL |
+| 9 | Delete the canary, the app resources, and the TMDB secret |
+
+Then trigger and watch a release with the commands in [Triggering a Canary Release](#triggering-a-canary-release) and [Monitoring Canary Progress](#monitoring-canary-progress).
 
 ### Option 2: Manual Deployment
 
-1. **Deploy the application:**
+1. **Create the TMDB API secret:**
+   ```bash
+   kubectl create secret generic tmdb-api-key \
+     --from-literal=TMDB_API_KEY="your_api_key_here"
+   ```
+
+2. **Deploy the application:**
    ```bash
    kubectl apply -f backend.yaml
    kubectl apply -f frontend.yaml
    kubectl apply -f gateway.yaml
    ```
 
-2. **Wait for deployment to be ready:**
+3. **Wait for deployment to be ready:**
    ```bash
-   kubectl wait --for=condition=available --timeout=300s deployment/sample-workload
+   kubectl wait --for=condition=available --timeout=300s deployment/movie-backend
    kubectl wait --for=condition=available --timeout=300s deployment/movie-frontend
    ```
 
-3. **Initialize Flagger canary:**
+4. **Initialize Flagger canary:**
    ```bash
    kubectl apply -f canary.yaml
    ```
 
-4. **Wait for Flagger to initialize:**
+5. **Wait for Flagger to initialize:**
    ```bash
    kubectl wait --for=condition=promoted --timeout=300s canary/canary-release
    ```
 
 ## Triggering a Canary Release
 
-### Scenario 1: Update Application Version
+Any change to the `movie-backend` pod template starts a new analysis.
+
+### Scenario 1: Update Configuration
 ```bash
-# Update the deployment with a new image version
-kubectl set image deployment/sample-workload \
-  sample-workload=sayedimran/istio-sample-workload:v2.0.0
+# Switch the backend from Bollywood to Hollywood data
+kubectl set env deployment/movie-backend DATA_DIR=hollywood-data
 ```
 
-### Scenario 2: Update Configuration
+### Scenario 2: Update Application Version
 ```bash
-# Update environment variables
-kubectl patch deployment sample-workload -p='{"spec":{"template":{"spec":{"containers":[{"name":"sample-workload","env":[{"name":"BG_COLOR","value":"green"},{"name":"SECONDARY_COLOR","value":"yellow"}]}]}}}}'
+# Update the deployment with a new image version
+kubectl set image deployment/movie-backend \
+  movie-backend=sayedimran/istio-sample-app-backend:v1.0.2
 ```
 
 ## Monitoring Canary Progress
@@ -166,78 +182,91 @@ kubectl get events --field-selector involvedObject.name=canary-release
 
 ### View Traffic Distribution
 ```bash
-# Check current VirtualService configuration
-kubectl get virtualservice sample-workload -o yaml
+# Check the current primary/canary weights
+kubectl get virtualservice movie-backend -o yaml
 
-# Monitor pods
-kubectl get pods -l app=sample-workload
+# Check the primary and canary deployments
+kubectl get deployment movie-backend movie-backend-primary
 
 # Check primary and canary services
-kubectl get svc -l app=sample-workload
+kubectl get svc movie-backend movie-backend-primary movie-backend-canary
 ```
 
 ### Access Application
+
+The Gateway and VirtualServices only accept the host `devops.imran`, so send that `Host` header:
+
 ```bash
 # Get ingress gateway URL
 export INGRESS_HOST=$(kubectl -n istio-system get service istio-ingressgateway -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
 export INGRESS_PORT=$(kubectl -n istio-system get service istio-ingressgateway -o jsonpath='{.spec.ports[?(@.name=="http2")].port}')
 export GATEWAY_URL=$INGRESS_HOST:$INGRESS_PORT
 
-# Access the application
-curl http://$GATEWAY_URL
-# or open in browser
-open http://$GATEWAY_URL
+# Frontend
+curl -H "Host: devops.imran" http://$GATEWAY_URL/
+
+# Backend API (served by the primary or the canary)
+curl -H "Host: devops.imran" http://$GATEWAY_URL/api/
 ```
+
+To use a browser, add `<INGRESS_HOST> devops.imran` to `/etc/hosts` and open `http://devops.imran`. If the gateway has no external IP, run `kubectl port-forward -n istio-system svc/istio-ingressgateway 8080:80` and set `GATEWAY_URL=localhost:8080`.
 
 ## Canary Analysis Configuration
 
-The canary analysis is configured with the following parameters:
+`canary.yaml` configures the analysis with these parameters:
 
 - **Interval**: 1 minute between analysis checks
 - **Threshold**: 10 failed checks before rollback
 - **Max Weight**: 50% maximum traffic to canary
 - **Step Weight**: 10% traffic increment per successful check
-- **Success Rate**: Minimum 99% success rate required
-- **Request Duration**: Maximum 500ms average response time
+- **Success Rate**: At least 99% of requests must succeed (measured over 1 minute)
+- **Request Duration**: P99 latency must stay at or below 500 ms (measured over 30 seconds)
+- **Progress Deadline**: 60 seconds for the canary deployment to make progress before Flagger rolls it back
+- **Retries**: Up to 3 attempts, 1 second per try, on gateway errors, connect failures, and refused streams
 
 ### Metrics Monitored
-1. **Request Success Rate**: HTTP 2xx responses / total requests
-2. **Request Duration**: Average response time in milliseconds
+1. **Request Success Rate**: Percentage of requests that don't return a 5xx response
+2. **Request Duration**: 99th percentile response time in milliseconds
 
 ### Webhooks
-1. **Pre-rollout Test**: Validates canary before traffic shifting
-2. **Load Test**: Generates consistent traffic during analysis
+Both webhooks run from the load tester against `http://movie-backend-canary.default:8000/`:
+1. **Pre-rollout Test** (`acceptance-test`): Runs `curl` against the canary before any traffic shifts
+2. **Load Test** (`load-test`): Runs `hey` for 2 minutes with 2 workers at 10 requests per second each, so the canary has traffic to measure
 
 ## Canary Lifecycle
 
-1. **Initialization**: Flagger creates primary deployment and services
-2. **Trigger**: Deployment update detected
-3. **Canary Creation**: New version deployed as canary
+1. **Initialization**: Flagger creates `movie-backend-primary`, the services, and the routing, then scales `movie-backend` to zero
+2. **Trigger**: Flagger detects a change to the `movie-backend` pod template
+3. **Canary Creation**: Flagger scales `movie-backend` back up with the new version as the canary
 4. **Pre-rollout**: Acceptance tests run against canary
 5. **Traffic Shifting**: Gradual traffic increase (10% → 20% → 30% → 40% → 50%)
 6. **Analysis**: Metrics checked at each step (1-minute intervals)
-7. **Promotion**: If successful, canary becomes primary
-8. **Rollback**: If failed, traffic returns to primary and canary is scaled down
+7. **Promotion**: If successful, Flagger copies the canary spec to the primary, routes all traffic back to the primary, and scales the canary to zero
+8. **Rollback**: If 10 checks fail, traffic returns to the primary and the canary is scaled to zero
 
 ## Observability
 
-### Flagger Metrics Dashboard
+### Grafana Dashboards
 ```bash
 # If Grafana is installed
 istioctl dashboard grafana
-# Navigate to Flagger dashboard
 ```
+
+Istio's Grafana add-on includes the Istio dashboards. Flagger's own canary dashboards come from the separate `flagger/grafana` Helm chart.
 
 ### Application Logs
 ```bash
 # Check primary workload logs
-kubectl logs -f deployment/sample-workload-primary
+kubectl logs -f deployment/movie-backend-primary
 
 # Check canary workload logs (during analysis)
-kubectl logs -f deployment/sample-workload
+kubectl logs -f deployment/movie-backend
 
 # Check Flagger operator logs
 kubectl logs -f deployment/flagger -n istio-system
+
+# Check load tester logs
+kubectl logs -f deployment/flagger-loadtester -n istio-system
 ```
 
 ### Istio Observability
@@ -257,7 +286,7 @@ istioctl dashboard jaeger
    ```bash
    # Check Flagger logs
    kubectl logs -f deployment/flagger -n istio-system
-   
+
    # Verify Prometheus connectivity
    kubectl exec -it deployment/flagger -n istio-system -- \
      wget -q -O- http://prometheus.istio-system:9090/api/v1/query?query=up
@@ -268,18 +297,23 @@ istioctl dashboard jaeger
    # Check metrics manually
    kubectl port-forward -n istio-system svc/prometheus 9090:9090
    # Visit http://localhost:9090 and query istio metrics
-   
+
    # Check load tester
-   kubectl logs -f deployment/flagger-loadtester -n test
+   kubectl logs -f deployment/flagger-loadtester -n istio-system
    ```
 
 3. **Traffic not shifting**:
    ```bash
    # Verify VirtualService updates
-   kubectl get virtualservice sample-workload -o yaml
-   
-   # Check Istio proxy configuration
-   istioctl proxy-config routes deployment/sample-workload
+   kubectl get virtualservice movie-backend -o yaml
+
+   # Check the routes on the ingress gateway
+   istioctl proxy-config routes deployment/istio-ingressgateway -n istio-system
+   ```
+
+4. **Backend pods stuck in `CreateContainerConfigError`**: The `tmdb-api-key` secret is missing.
+   ```bash
+   kubectl get secret tmdb-api-key
    ```
 
 ### Cleanup
@@ -293,14 +327,16 @@ kubectl delete -f backend.yaml
 kubectl delete -f frontend.yaml
 kubectl delete -f gateway.yaml
 
-# Delete namespace (if using dedicated namespace)
-kubectl delete namespace canary-demo
+# Delete the TMDB secret
+kubectl delete secret tmdb-api-key
 ```
+
+`./cleanup.sh` runs most of this interactively. `./cleanup.sh -d` also uninstalls Flagger and Prometheus.
 
 ## Advanced Configuration
 
 ### Custom Metrics
-You can extend the canary analysis with custom Prometheus queries:
+You can extend the canary analysis with custom Prometheus queries under `analysis.metrics`. Flagger also supports defining them as reusable `MetricTemplate` resources.
 
 ```yaml
 metrics:
@@ -310,18 +346,19 @@ metrics:
   query: |
     sum(rate(
       istio_requests_total{
-        destination_service_name="sample-workload",
+        destination_workload="movie-backend",
         response_code="404"
       }[1m]
     ))
 ```
 
 ### Header-Based Testing
-Enable testing with specific headers:
+To send only requests with a specific header to the canary (A/B testing), Flagger uses `iterations` instead of `stepWeight` and `maxWeight`:
 
 ```yaml
 analysis:
   # ... other configuration
+  iterations: 10
   match:
     - headers:
         x-canary:

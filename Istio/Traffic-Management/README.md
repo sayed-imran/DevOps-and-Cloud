@@ -16,7 +16,7 @@ Traffic-Management/
 **Purpose**: Manual traffic control and weighted routing between service versions
 
 **Key Features**:
-- Weighted traffic distribution (0/100, 20/80, 50/50, 100/0)
+- Weighted traffic distribution (100/0, 80/20, 50/50, 0/100)
 - A/B testing capabilities
 - Blue-green deployment patterns
 - Manual canary deployment control
@@ -66,10 +66,9 @@ Traffic-Management/
 - **Maintained By**: DevOps Engineering Team
 
 ### Prerequisites
-- Kubernetes cluster with Istio service mesh installed
-- kubectl configured for cluster access
-- Prometheus and Grafana (for monitoring)
-- Flagger operator (for automated canary demos)
+- **Traffic Shifting**: Docker, Kind, kubectl, and istioctl. The deploy script creates a Kind cluster and installs Istio for you.
+- **Flagger Canary Release**: a Kubernetes cluster, kubectl, istioctl, and Helm. The deploy script can install Istio, Prometheus, Flagger, and the Flagger load tester.
+- Grafana and Kiali are optional, for dashboards.
 
 ### Use Cases
 - **Development Teams**: Learn progressive deployment strategies
@@ -79,25 +78,17 @@ Traffic-Management/
 
 ## Getting Started
 
-Each demonstration includes:
-- 📋 **Setup instructions** (`SETUP.md`)
-- 🚀 **Deployment scripts** (`deploy.sh`)
-- 🔬 **Testing scripts** (`test-*.sh`)
-- 🧹 **Cleanup scripts** (`cleanup.sh`)
-- 📖 **Detailed documentation** (`README.md`)
+Run each demo's scripts from that demo's directory, because they use relative paths.
 
-### Quick Start
-1. Choose your demonstration:
-   - For manual traffic control: `cd traffic-shifting/`
-   - For automated canary: `cd flagger-canary-release/`
+| | Traffic Shifting | Flagger Canary Release |
+|---|---|---|
+| Directory | `traffic-shifting/` | `flagger-canary-release/` |
+| Setup guide | [`docs/SETUP.md`](traffic-shifting/docs/SETUP.md) | [`SETUP.md`](flagger-canary-release/SETUP.md) |
+| Deploy | `./scripts/deploy.sh` | `./deploy.sh` |
+| Exercise it | `./scripts/test-traffic.sh test 100` | `kubectl set env deployment/movie-backend DATA_DIR=hollywood-data`, then `kubectl get canary canary-release -w` |
+| Clean up | `./scripts/deploy.sh cleanup` | `./cleanup.sh` |
 
-2. Follow the setup instructions in the respective `SETUP.md`
-
-3. Run the deployment: `./deploy.sh`
-
-4. Execute tests: `./test-*.sh`
-
-5. Clean up resources: `./cleanup.sh`
+See each demo's `README.md` for the full walkthrough.
 
 ## Architecture Patterns
 
@@ -113,8 +104,8 @@ Client → Istio Gateway → Flagger Canary → Auto-generated VirtualService �
 
 ## Monitoring and Observability
 
-Both demonstrations integrate with:
-- **Prometheus**: Metrics collection and analysis
+Both demos work with Istio's observability add-ons when they're installed:
+- **Prometheus**: Metrics collection and analysis (required by Flagger)
 - **Grafana**: Visualization dashboards
 - **Kiali**: Service mesh topology and traffic flow
 - **Jaeger**: Distributed tracing (optional)
@@ -146,6 +137,6 @@ For questions or issues:
 
 ---
 
-**Last Updated**: June 2025  
+**Last Updated**: October 2026  
 **Istio Version Compatibility**: 1.20+  
 **Kubernetes Version**: 1.28+

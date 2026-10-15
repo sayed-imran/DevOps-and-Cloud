@@ -17,13 +17,15 @@ This guide will help you set up Istio on a Kubernetes cluster with an external V
 - [External VM Setup](#5-external-vm-setup)
   - [Creating VM](#51-creating-vm)
   - [Copy the generated files to the external VM](#52-copy-the-generated-files-to-the-external-vm)
-  - [Move the files to the correct location on the external VM](#53-move-the-files-to-the-correct-location-on-the-external-vm)
-  - [Install Istio sidecar on the external VM](#54-install-istio-sidecar-on-the-external-vm)
+  - [Install the Istio sidecar on the external VM](#53-install-the-istio-sidecar-on-the-external-vm)
+  - [Move the files into place and start Istio](#54-move-the-files-into-place-and-start-istio)
   - [Final Architecture](#final-architecture)
+
+Run the commands in sections 2–4 from the repository root, because the file paths are relative to it.
 
 ### 1. Kubernetes
 
-Any Kubernetes Cluster shall work. You can use a managed Kubernetes service like GKE, EKS, or AKS. A serviceaccount is considered as indentity for the workloads in the cluster for the Istio. So to have an external VM to communicate with the services in the Kubernetes cluster, we need to create a service account and a service for the same.
+Any Kubernetes cluster works, including managed services like GKE, EKS, or AKS. Istio uses a Kubernetes service account as a workload's identity. For the external VM to communicate with the services in the cluster, it needs a service account and a Service there. The sample application in step 3 creates the `data-service-sa` service account that the VM's WorkloadGroup uses.
 
 Before getting started with the setup, we need to have Istio pre-requisites installed in the Kubernetes cluster.
 
@@ -32,7 +34,7 @@ Before getting started with the setup, we need to have Istio pre-requisites inst
 
 #### 2.1 Install Istioctl command line tool
 
-At the time of writing this guide, the latest version of Istio is 1.23.2. You can download the latest version of Istio from the [Istio releases page](https://istio.io/latest/docs/setup/getting-started/#download).
+At the time of writing this guide, the latest version of Istio is 1.23.2. You can download the latest version of Istio from the [Istio releases page](https://istio.io/latest/docs/setup/getting-started/#download). Note the version you install, because the sidecar package on the VM (step 5.3) must match it.
 
 ```bash
 curl -L https://istio.io/downloadIstio | sh -
@@ -49,8 +51,10 @@ istioctl install \
 
 #### 2.3 Install the east-west gateway.
 
+`east-west-gateway.yaml` is an `IstioOperator` that adds only the gateway (`profile: empty`), so install it with `istioctl`, not `kubectl apply`:
+
 ```bash
-kubectl apply -f Istio/External-VM/east-west-gateway.yaml
+istioctl install -y -f Istio/External-VM/east-west-gateway.yaml
 ```
 
 #### 2.4 Expose istiod through the east-west gateway
@@ -60,7 +64,7 @@ kubectl apply -f Istio/External-VM/istio-gateway.yaml
 ```
 
 ### 3. Sample Application
-We'll be using a sample application to demostrate the communication between the services in the Kubernetes cluster and the external VM. The sample application is an animal album application that displays images of animals. The details of the same can be found [here](../../Sample-Apps/animal-images-display-app/README.md).
+We'll be using a sample application to demonstrate the communication between the services in the Kubernetes cluster and the external VM. The sample application is an animal album application that displays images of animals. The details of the same can be found [here](../../Sample-Apps/animal-images-display-app/README.md).
 
 
 #### Application Flow Diagram
@@ -84,7 +88,7 @@ kubectl apply -f Istio/External-VM/workload-group.yaml
 ```bash
 mkdir vm_files
 istioctl x workload entry configure \
-     --file Istio/External-VM/istio-setup/workload-group.yaml \
+     --file Istio/External-VM/workload-group.yaml \
      --output vm_files \
      --autoregister
 ```
@@ -110,7 +114,17 @@ gcloud compute instances create external-vm --tags=external-vm \
 gcloud compute scp  vm_files/* ubuntu@external-vm:
 ```
 
-#### 5.3 Move the files to the correct location on the external VM.
+#### 5.3 Install the Istio sidecar on the external VM.
+
+Install the package first, because it creates the `istio-proxy` user that owns the files in the next step. Use the same version as the Istio control plane in your cluster.
+
+```bash
+ISTIO_VERSION=1.23.2
+curl -LO https://storage.googleapis.com/istio-release/releases/${ISTIO_VERSION}/deb/istio-sidecar.deb
+sudo dpkg -i istio-sidecar.deb
+```
+
+#### 5.4 Move the files into place and start Istio.
 
 ```bash
 # place the root certificate in its proper place:
@@ -121,8 +135,8 @@ sudo cp ~/root-cert.pem /etc/certs/root-cert.pem
 sudo mkdir -p /var/run/secrets/tokens
 sudo cp ~/istio-token /var/run/secrets/tokens/istio-token
 
-
 # copy over the environment file and mesh configuration file:
+sudo mkdir -p /var/lib/istio/envoy /etc/istio/config
 sudo cp ~/cluster.env /var/lib/istio/envoy/cluster.env
 sudo cp ~/mesh.yaml /etc/istio/config/mesh
 
@@ -132,13 +146,9 @@ sudo mkdir -p /etc/istio/proxy
 
 # make the user "istio-proxy" the owner of all these files:
 sudo chown -R istio-proxy /etc/certs /var/run/secrets /var/lib/istio /etc/istio/config /etc/istio/proxy
-```
 
-#### 5.4 Install istio sidecar on the external VM.
-
-```bash
-curl -LO https://storage.googleapis.com/istio-release/releases/1.23.2/deb/istio-sidecar.deb
-sudo dpkg -i istio-sidecar.deb
+# start the Istio sidecar:
+sudo systemctl start istio
 ```
 
 The setup is complete now. It takes a while for the external VM to be ready to communicate with the services in the Kubernetes cluster. The connectivity can be confirmed by checking for a resource `workloadentry` in the animal album namespace.
@@ -147,7 +157,7 @@ The setup is complete now. It takes a while for the external VM to be ready to c
 kubectl get workloadentry -n animal-album
 ```
 
-After getting a record for the same. The traffic can be sent and recieved from/to the external VM through the Kubernetes Cluster!
+Once the WorkloadEntry shows up, traffic can be sent and received between the external VM and the services in the Kubernetes cluster. If it doesn't appear, check the sidecar log on the VM at `/var/log/istio/istio.log`.
 
 
 ## Final Architecture

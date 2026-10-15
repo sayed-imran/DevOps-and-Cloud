@@ -6,16 +6,16 @@ This guide will help you set up and run the traffic shifting demo using Istio se
 
 Before you begin, ensure you have the following installed:
 
-1. **Kubernetes cluster** (v1.20+ recommended)
-   - Local: Docker Desktop, minikube, kind, or k3s
-   - Cloud: GKE, EKS, AKS, or any managed Kubernetes service
+1. **Docker** and **Kind**
+   - `scripts/deploy.sh` creates a single-node Kind cluster named `cluster1` from `infrastructure/kind/kind-config.yaml`
+   - The cluster maps host port 80 to the ingress gateway, so port 80 must be free
 
 2. **kubectl** configured to connect to your cluster
    ```bash
    kubectl version --client
    ```
 
-3. **Kind & Istio Setup** (automated by `scripts/deploy.sh`)
+3. **istioctl**. `scripts/deploy.sh` uses it, together with Kind, to run these steps for you:
    ```bash
    # Kind cluster config: infrastructure/kind/kind-config.yaml
    kind create cluster --config infrastructure/kind/kind-config.yaml
@@ -36,8 +36,8 @@ Before you begin, ensure you have the following installed:
 
 1. **Clone the repository** (if not already done)
    ```bash
-   git clone <repository-url>
-   cd traffic-management/traffic-shifting
+   git clone https://github.com/Sayed-Imran/DevOps-and-Cloud.git
+   cd DevOps-and-Cloud/Istio/Traffic-Management/traffic-shifting
    ```
 
 2. **Make scripts executable**
@@ -136,7 +136,7 @@ kubectl apply -f manifests/istio/virtual-services/virtual-service-0-100.yaml
 ./scripts/test-traffic.sh monitor
 
 # Check current configuration
-./scripts/test-traffic.sh config
+kubectl get virtualservice,destinationrule -n traffic-shifting-demo
 ```
 
 ### Access the Application
@@ -145,12 +145,17 @@ kubectl apply -f manifests/istio/virtual-services/virtual-service-0-100.yaml
 ./scripts/deploy.sh
 # Choose option 7 to get the access URL
 
-# Or manually get the URL
-kubectl -n istio-system get service istio-ingressgateway
+# On Kind, host port 80 is mapped to the ingress gateway
+curl http://localhost/        # frontend
+curl http://localhost/api/    # backend API
 ```
 
 ### Monitor with Istio Tools
 ```bash
+# Install Prometheus, which Kiali and Grafana read from
+# (use the release branch that matches your Istio version)
+kubectl apply -f https://raw.githubusercontent.com/istio/istio/release-1.20/samples/addons/prometheus.yaml
+
 # Install Kiali (if not already installed)
 kubectl apply -f https://raw.githubusercontent.com/istio/istio/release-1.20/samples/addons/kiali.yaml
 
@@ -217,16 +222,18 @@ traffic-shifting/
 
 1. **Pods not starting**
    ```bash
-   kubectl get pods
-   kubectl describe pod <pod-name>
-   kubectl logs <pod-name>
+   kubectl get pods -n traffic-shifting-demo
+   kubectl describe pod <pod-name> -n traffic-shifting-demo
+   kubectl logs <pod-name> -n traffic-shifting-demo
+
+   # Backend pods stay in CreateContainerConfigError if the TMDB secret is missing
+   kubectl get secret tmdb-api-key -n traffic-shifting-demo
    ```
 
 2. **Istio sidecar not injected**
    ```bash
-   kubectl label namespace default istio-injection=enabled
-   kubectl rollout restart deployment/movie-backend-v1
-   kubectl rollout restart deployment/movie-backend-v2
+   kubectl label namespace traffic-shifting-demo istio-injection=enabled --overwrite
+   kubectl rollout restart deployment/movie-frontend deployment/movie-backend-v1 deployment/movie-backend-v2 -n traffic-shifting-demo
    ```
 
 3. **Cannot access ingress**
@@ -234,44 +241,52 @@ traffic-shifting/
    # Check ingress gateway status
    kubectl -n istio-system get service istio-ingressgateway
    
-   # For local testing, use port-forward
+   # On Kind the app should answer on http://localhost (host port 80 → NodePort 30000).
+   # Otherwise, port-forward and open http://localhost:8080
    kubectl -n istio-system port-forward service/istio-ingressgateway 8080:80
    ```
 
 4. **Traffic not splitting as expected**
    ```bash
    # Check virtual service configuration
-   kubectl get virtualservice -o yaml
+   kubectl get virtualservice -n traffic-shifting-demo -o yaml
    
    # Verify destination rule
-   kubectl get destinationrule -o yaml
+   kubectl get destinationrule -n traffic-shifting-demo -o yaml
    ```
 
 ### Debug Commands
 ```bash
 # Check Istio proxy configuration
-istioctl proxy-config routes <pod-name>
-istioctl proxy-config clusters <pod-name>
+istioctl proxy-config routes <pod-name>.traffic-shifting-demo
+istioctl proxy-config clusters <pod-name>.traffic-shifting-demo
 
 # Analyze Istio configuration
-istioctl analyze
+istioctl analyze -n traffic-shifting-demo
 
 # Check Envoy access logs
-kubectl logs <pod-name> -c istio-proxy
+kubectl logs <pod-name> -c istio-proxy -n traffic-shifting-demo
 ```
 
 ## Cleanup
 
-To remove all resources:
+To remove all demo resources, including the namespace:
 
 ```bash
-./scripts/cleanup.sh
+./scripts/deploy.sh cleanup
+```
+
+To also delete the Kind cluster:
+
+```bash
+./scripts/cleanup.sh all
 ```
 
 Or manually:
 ```bash
-kubectl delete -f .
-kubectl delete secret tmdb-api-key
+kubectl delete namespace traffic-shifting-demo
+kubectl delete configmap traffic-policies test-scenarios -n default
+kind delete cluster --name cluster1   # optional
 ```
 
 ## Next Steps

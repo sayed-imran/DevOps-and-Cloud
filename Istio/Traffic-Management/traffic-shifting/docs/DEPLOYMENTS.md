@@ -1,7 +1,7 @@
 # Traffic Shifting Demo - Deployments Overview
 
 ## Namespace
-All resources are deployed in the `traffic-shifting-demo` namespace with Istio injection enabled.
+All resources are deployed in the `traffic-shifting-demo` namespace with Istio injection enabled. The exceptions are two ConfigMaps from `manifests/base/configmap.yaml` (`traffic-policies` and `test-scenarios`), which go to `default`.
 
 ## Core Deployments
 
@@ -25,7 +25,7 @@ All resources are deployed in the `traffic-shifting-demo` namespace with Istio i
 ### 3. Frontend Deployment
 - **File**: `manifests/base/frontend.yaml`
   - **Resource**: Deployment `movie-frontend`
-  - **Image**: `sayedimran/istio-sample-app-frontend:v1.0.0`
+  - **Image**: `sayedimran/istio-sample-app-frontend:v1.0.2`
   - **Labels**: `app=movie-frontend`
 
 ### 4. Services
@@ -72,8 +72,12 @@ All resources are deployed in the `traffic-shifting-demo` namespace with Istio i
 
 ### 7. Configuration and Secrets
 - **File**: `manifests/base/configmap.yaml`
-  - **Resource**: ConfigMap `observability-config`
-  - **Contains**: Kiali and Grafana configurations
+  - **Resource**: ConfigMap `observability-config` (namespace `traffic-shifting-demo`)
+    - **Contains**: Kiali and Grafana configurations
+  - **Resource**: ConfigMap `traffic-policies` (namespace `default`)
+    - **Contains**: Reference VirtualServices for each traffic split
+  - **Resource**: ConfigMap `test-scenarios` (namespace `default`)
+    - **Contains**: A load-test pod and a fault-injection VirtualService
 
 - **Secret**: `tmdb-api-key`
   - **Created by**: `scripts/deploy.sh` script
@@ -82,21 +86,24 @@ All resources are deployed in the `traffic-shifting-demo` namespace with Istio i
 ## Deployment Process
 
 ### Prerequisites
-1. Kubernetes cluster with Istio installed
+1. Docker and Kind (the script creates the `cluster1` Kind cluster if it doesn't exist)
 2. `kubectl` and `istioctl` commands available
 3. TMDB API key (optional, demo key used if not provided)
 
 ### Deployment Steps
-The `scripts/deploy.sh` script handles the complete deployment:
+The `scripts/deploy.sh` script (option 1, or `./scripts/deploy.sh deploy`) handles the complete deployment:
 
-1. **Create Namespace**: Creates `traffic-shifting-demo` namespace with Istio injection
-2. **Create Secret**: Creates TMDB API key secret
-3. **Deploy Frontend**: Deploys frontend application with service and VirtualService
-4. **Deploy Backend**: Deploys both v1 and v2 backend deployments
-5. **Deploy Services**: Creates backend service
-6. **Deploy Networking**: Creates Gateway and DestinationRule
-7. **Deploy Config**: Creates observability ConfigMap
-8. **Wait for Ready**: Waits for all deployments to be available
+1. **Create Cluster**: Creates the Kind cluster `cluster1` from `infrastructure/kind/kind-config.yaml`, if it doesn't exist
+2. **Install Istio**: Installs Istio from `infrastructure/istio/istio.yaml`, if the ingress gateway isn't already there
+3. **Create Namespace**: Creates `traffic-shifting-demo` namespace with Istio injection
+4. **Create Secret**: Creates TMDB API key secret
+5. **Deploy Frontend**: Deploys frontend application with service and VirtualService
+6. **Deploy Backend**: Deploys both v1 and v2 backend deployments
+7. **Deploy Services**: Creates backend service
+8. **Deploy Networking**: Creates Gateway and DestinationRule
+9. **Deploy Config**: Creates the ConfigMaps from `configmap.yaml`
+10. **Set Initial Routing**: Applies `virtual-service-100-0.yaml` (100% to v1)
+11. **Wait for Ready**: Waits for all deployments to be available
 
 ### Traffic Management
 Use the deployment script to manage traffic splitting:

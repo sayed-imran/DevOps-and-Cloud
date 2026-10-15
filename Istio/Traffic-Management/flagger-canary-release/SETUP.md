@@ -28,13 +28,10 @@ kubectl get pods -n istio-system
 
 ### 3. Enable Istio Injection
 ```bash
-# For default namespace
 kubectl label namespace default istio-injection=enabled
-
-# For custom namespace (replace 'canary-demo' with your namespace)
-kubectl create namespace canary-demo
-kubectl label namespace canary-demo istio-injection=enabled
 ```
+
+The demo's manifests and the webhook URLs in `canary.yaml` assume the `default` namespace.
 
 ### 4. Install Helm (if not already installed)
 ```bash
@@ -53,7 +50,7 @@ helm version
 #### Option A: Using the deploy script (Recommended)
 ```bash
 ./deploy.sh
-# Choose option 2: "Install Missing Dependencies"
+# Choose option 3: "Install Missing Dependencies" (Istio, Prometheus, Flagger, and the load tester)
 ```
 
 #### Option B: Manual installation
@@ -89,16 +86,15 @@ kubectl get svc prometheus -n istio-system
 ```
 
 ### 7. Install Flagger Load Tester
+The webhooks in `canary.yaml` call `http://flagger-loadtester.istio-system/`, so install the load tester in `istio-system`:
 ```bash
-# Create test namespace
-kubectl create namespace test
-kubectl label namespace test istio-injection=enabled
-
-# Install load tester
-kubectl apply -k https://github.com/fluxcd/flagger//kustomize/tester?ref=main
+helm upgrade -i flagger-loadtester flagger/loadtester \
+  --namespace=istio-system \
+  --set cmd.timeout=1h \
+  --set cmd.namespaceRegexp=''
 
 # Verify installation
-kubectl get pods -n test -l app=flagger-loadtester
+kubectl get deployment flagger-loadtester -n istio-system
 ```
 
 ## Verification
@@ -115,7 +111,7 @@ kubectl get pods -n istio-system -l app.kubernetes.io/name=flagger
 kubectl get svc prometheus -n istio-system
 
 # Check Load Tester
-kubectl get pods -n test -l app=flagger-loadtester
+kubectl get deployment flagger-loadtester -n istio-system
 
 # Check CRDs
 kubectl get crd canaries.flagger.app
@@ -129,7 +125,7 @@ curl -s http://localhost:9090/api/v1/query?query=up | jq .
 pkill -f "port-forward.*prometheus"
 
 # Test load tester
-kubectl port-forward -n test svc/flagger-loadtester 8080:80 &
+kubectl port-forward -n istio-system svc/flagger-loadtester 8080:80 &
 curl -s http://localhost:8080/ | grep -i flagger
 pkill -f "port-forward.*loadtester"
 ```
@@ -174,18 +170,15 @@ kubectl get svc istio-ingressgateway -n istio-system
 ```
 
 #### Google GKE
-```bash
-# Enable Istio addon (alternative to manual installation)
-gcloud container clusters update CLUSTER_NAME \
-  --update-addons=Istio=ENABLED \
-  --istio-config=auth=MTLS_PERMISSIVE
-```
+Install Istio with `istioctl` as in step 2. The old "Istio on GKE" add-on has been removed, so `--update-addons=Istio=ENABLED` no longer works.
 
 #### Azure AKS
 ```bash
 # Enable Istio addon (alternative to manual installation)
 az aks mesh enable --resource-group myResourceGroup --name myAKSCluster
 ```
+
+The AKS add-on uses revision labels (`istio.io/rev`) for sidecar injection and has its own ingress gateway names. This demo's `istio-injection=enabled` label and the `istio: ingressgateway` selector in `gateway.yaml` would need changing to work with it. Installing Istio with `istioctl` (step 2) avoids that.
 
 ### For Local Development
 
@@ -199,31 +192,16 @@ kubectl patch svc istio-ingressgateway -n istio-system -p '{"spec":{"type":"Node
 ```
 
 #### Kind
+Reuse the Kind and Istio configs from the traffic-shifting demo. They map host port 80 to the ingress gateway's NodePort 30000:
 ```bash
-# Configure kind with port mapping
-cat <<EOF | kind create cluster --config=-
-kind: Cluster
-apiVersion: kind.x-k8s.io/v1alpha4
-nodes:
-- role: control-plane
-  kubeadmConfigPatches:
-  - |
-    kind: InitConfiguration
-    nodeRegistration:
-      kubeletExtraArgs:
-        node-labels: "ingress-ready=true"
-  extraPortMappings:
-  - containerPort: 80
-    hostPort: 80
-    protocol: TCP
-  - containerPort: 443
-    hostPort: 443
-    protocol: TCP
-EOF
+kind create cluster --config ../traffic-shifting/infrastructure/kind/kind-config.yaml
+istioctl install -f ../traffic-shifting/infrastructure/istio/istio.yaml -y
 
-# Use NodePort for ingress
-kubectl patch svc istio-ingressgateway -n istio-system -p '{"spec":{"type":"NodePort"}}'
+# Once the app is deployed, it answers on localhost
+curl -H "Host: devops.imran" http://localhost/
 ```
+
+This creates a cluster named `cluster1`, the same name the traffic-shifting and multi-cluster demos use, so run only one of them at a time.
 
 ## Troubleshooting Setup
 
@@ -243,7 +221,7 @@ kubectl patch svc istio-ingressgateway -n istio-system -p '{"spec":{"type":"Node
 
 3. **Load tester not working**:
    ```bash
-   kubectl logs -f deployment/flagger-loadtester -n test
+   kubectl logs -f deployment/flagger-loadtester -n istio-system
    # Check for network policies blocking traffic
    ```
 
@@ -266,7 +244,7 @@ kubectl delete crd canaries.flagger.app
 kubectl delete -f https://raw.githubusercontent.com/istio/istio/release-1.20/samples/addons/prometheus.yaml
 
 # Remove Load Tester
-kubectl delete namespace test
+helm uninstall flagger-loadtester -n istio-system
 
 # Remove Istio (if needed)
 istioctl uninstall --purge -y
